@@ -1,0 +1,15 @@
+!.gitignore
+
+# Complied files
+*.pyc
+
+# emacs files
+*~
+*#
+
+# histograms
+*.pdf
+*.C
+*.gif
+*.png
+*.jpg
