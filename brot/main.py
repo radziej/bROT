@@ -18,6 +18,10 @@ import tdrstyle
 from lib.configobj import ConfigObj
 from lib.validate import Validator
 
+#import functions defined in 'export.py'
+from export import *
+
+
 
 ######################################################################
 # defining classes to have global variables
@@ -32,11 +36,12 @@ objects = Objects()
 
 class Settings():
     # basic settings
-    base_dir    = None # base directory for analyses
-    ana_dir     = None # analysis files subdirectory in base_dir
-    file_dir    = None # ROOT files subdirectory in the ana_dir
-    tree_name   = None # name of tree in root files
+    base_dir    = "" # base directory for analyses
+    ana_dir     = "" # analysis files subdirectory in base_dir
+    file_dir    = "" # ROOT files subdirectory in the ana_dir
+    tree_name   = "" # name of tree in root files
     luminosity  = 0 # luminosity
+    hist_prefix = "" # prefix of histograms, sth like "h1_0_..."
 
     # switches
     draw_data           = True # do or dont draw the data
@@ -95,6 +100,8 @@ def setup(config_file):
     settings.file_dir = objects.cfg["general"]["file_dir"]
     # reading tree name
     settings.tree_name = objects.cfg["general"]["tree_name"]
+    # reading histogram prefix
+    settings.hist_prefix = objects.cfg["general"]["hist_prefix"]
 
     # reading luminosity value
     settings.luminosity = objects.cfg["data"].as_float("luminosity")
@@ -198,7 +205,7 @@ def read_processes(histogram_name):
         print "No config file loaded! Use setup('plot.cfg')"
         return
 
-    if settings.ana_dir is None:
+    if settings.ana_dir is "":
         print "No selection done yet. Use selection('fullrun75')"
         return
 
@@ -335,14 +342,15 @@ def stack_histograms():
         # order the histograms according to their integral
         joined_backgrounds = order_histograms(joined_backgrounds)
         # add the histograms to a THStack and save it in the plotting class
-        background_stack = THStack("background_stack", "THStack of Backgrounds")
+        background_stack = THStack(get_draw_object().GetName(), get_draw_object().GetName())
         for background in joined_backgrounds:
             background_stack.Add(background)
         pads[plotting.pad_nr].background_stack = background_stack
     
     # stacking signal on top of background
     # TODO
-    
+
+
 
 def rebin(number_of_bins):
     """Rebin the data, background and signals."""
@@ -399,7 +407,7 @@ def get_draw_object():
 
 
 
-def max(maximum_value):
+def maxy(maximum_value):
     """Sets the highest value on the y-axis that is being shown."""
 
     hist = get_draw_object()
@@ -409,7 +417,7 @@ def max(maximum_value):
 
 
 
-def min(minimum_value):
+def miny(minimum_value):
     """Sets the lowest value on the y-axis that is being shown."""
 
     hist = get_draw_object()
@@ -424,6 +432,8 @@ def logy(set_logy = True):
 
     if gPad:
         gPad.SetLogy(set_logy)
+        update_pad()
+        
 
 
 
@@ -480,6 +490,7 @@ def draw_histograms():
     update_pad()
 
 
+
 def plot(histogram_name):
     """Compose and draw a plot using the histograms called histogram_name."""
 
@@ -490,12 +501,96 @@ def plot(histogram_name):
     delete_old_processes() # delete old processes and stacks of the current pad
     read_processes(histogram_name) # load histogram of the processes
     draw_histograms() # draw the histograms
-    # draw_histograms()
 
 
 
-def export(function_title = ""):
-    """Exports the Python history up to the last call of plot() to a function in 'export.py'.
-    If no function_title is given, the histogram title will be used."""
+def remove_export_function(function_title):
+    """Removes the function with the title function_title from the 'export.py' file."""
 
-    print readline.get_history_item(readline.get_current_history_length())
+    with open("export.py", "r") as export:
+        with open("temp.py", "w") as temp:
+            for line in export:
+                # write all lines into the temp file, that do not contain the
+                # function header
+                if not "def" + function_title + "(" in line.replace(" ", ""):
+                    temp.write(line)
+                else:
+                    # if the function header has been found, skip all its contents
+                    try:
+                        line = export.next()
+                        while line == "" or line.startswith(" ") or line.startswith("\t"):
+                            line = export.next()
+                    except StopIteration:
+                        continue
+
+    # create backup and rename file
+    os.rename("export.py", "bkup_export.py")
+    os.rename("temp.py", "export.py")
+
+
+
+def export(function_title = "", export_selection = True, export_setup = False):
+    """Exports the Python history up to the last call of plot() to a function in
+    'export.py'. If no function_title is given, the histogram title will be
+    used."""
+
+    exclusion_list = ["quit", "export"]
+    line_buffer = []
+    plot_index = 0
+    
+    selection_index = 0
+    
+    # find the plot and selection commands
+    for i in reversed(range(readline.get_current_history_length())):
+        item = readline.get_history_item(i)
+        
+        # skip lines like quit() or export() to buffer
+        for exclusion in exclusion_list:
+            if item.startswith(exclusion):
+                continue
+
+        # add line to buffer
+        line_buffer.append(item)
+
+        # if the plot(...) command has been found, stop
+        if item.startswith("plot("):
+            plot_index = i
+            break
+
+    # check if there was a plot(...)
+    if plot_index == 0:
+        print "Could not find an instance of plot(...)!"
+        return
+
+    # add some additional lines if the options are given
+    if export_selection:
+        line_buffer.append("selection(" + settings.ana_dir + ")")
+
+    if export_setup:
+        line_buffer.append("selection(" + objects.cfg.filename.split("/")[2] + ")")
+
+    # get function title
+    if function_title == "":
+        function_title = get_draw_object().GetName().replace(settings.hist_prefix, "")
+
+
+    # checking for existing function in 'export.py'
+    with open("export.py", "r") as f:
+        # check if function exists already
+        for line in f:
+            if "def" + function_title + "(" in line.replace(" ", ""):
+                # ask for action if function is found
+                yorn = raw_input("The function " + function_title + " has been found in 'export.py', do you want to overwrite it? [y]/n: ")
+                if yorn == "" or yorn == "y":
+                    print "Overwriting function", function_title
+                    remove_export_function(function_title)
+                else:
+                    print "Not exporting function", function_title
+                    return
+
+    # write function to 'export.py'
+    with open("export.py", "a") as f:
+        f.write("\n")
+        f.write("def " + function_title + "():\n")
+        for line in reversed(line_buffer):
+            f.write("    " + line + "\n")
