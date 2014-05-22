@@ -1,4 +1,7 @@
 !.gitignore
+# bROT files
+export.py
+bkup_export.py
 
 # Complied files
 *.pyc
