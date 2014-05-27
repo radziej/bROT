@@ -6,6 +6,7 @@
 # python imports
 import os
 import sys
+import copy
 import math
 import readline
 from collections import namedtuple
@@ -17,9 +18,6 @@ from ROOT import *
 import tdrstyle
 from lib.configobj import ConfigObj
 from lib.validate import Validator
-
-#import functions defined in 'export.py'
-from export import *
 
 
 
@@ -42,6 +40,7 @@ class Settings():
     tree_name   = "" # name of tree in root files
     luminosity  = 0 # luminosity
     hist_prefix = "" # prefix of histograms, sth like "h1_0_..."
+    header_text = "" # CMS data taking period/publication/preliminary
 
     # switches
     draw_data           = True # do or dont draw the data
@@ -59,12 +58,23 @@ class Process():
     nev         = 0
     weight      = 0.
 
+class Ratio():
+    pad         = None
+    hist        = None
+    line        = None
+
 class Pad():
     data                = None # process: data
-    background          = []   # processes: background
-    signal              = []   # processes: signal
+    backgrounds         = []   # processes: background
+    ordered_backgrounds = []
+    signals             = []   # processes: signal
     background_stack    = None # thstack : backgrounds
     signal_stack        = None # thstack : signal
+    legend              = None # tlegend
+    ratio               = None
+    latex               = [] # list of latex objects
+    
+    misc                = [] # list to append miscellaneous draw objects
 
 pads = [] # list of pads proportional to number of pads
 
@@ -90,7 +100,7 @@ def setup(config_file):
     # enter default values and check for errors
     if not objects.cfg.validate(objects.validator):
         print "Failed config file validation."
-        
+
     # reading the cross section config file
     objects.xs_cfg = ConfigObj("../cfg/" + objects.cfg["general"]["xs_file"])
 
@@ -103,6 +113,8 @@ def setup(config_file):
     # reading histogram prefix
     settings.hist_prefix = objects.cfg["general"]["hist_prefix"]
 
+    # reading cms text
+    settings.header_text = objects.cfg["general"]["header_text"]
     # reading luminosity value
     settings.luminosity = objects.cfg["data"].as_float("luminosity")
 
@@ -129,7 +141,7 @@ def selection(analysis_directory):
 
 def brot_init():
     """Initialize default settings for the bROT package."""
-    
+
     tdrstyle.set_tdr_style() # using TDR style for plotting
     setup("plot.cfg") # setup using the default plot.cfg
     selection("pytest")
@@ -143,10 +155,11 @@ def clear_and_prepare_pads(max_pad_number):
     # delete all pads
     while pads:
         pads.pop(0)
-    
+
     # create process lists proportional to number of pads
     for i in range(max_pad_number):
         pads.append(Pad())
+
 
 
 def create_canvas(divide_x = 1, divide_y = 1):
@@ -159,10 +172,10 @@ def create_canvas(divide_x = 1, divide_y = 1):
 
     # destroy previous canvas
     if plotting.canvas is not None:
-        plotting.canvas.IsA().Destructor(plotting.canvas)
-    
+        plotting.canvas = None
+
     # create canvas (used globally)
-    x_size = int(round(600 * math.sqrt(2))) * divide_x
+    x_size = 850 * divide_x
     y_size = 600 * divide_y
     plotting.canvas = TCanvas("gCanvas", "Analysis", 0, 0, x_size, y_size)
 
@@ -179,7 +192,7 @@ def create_canvas(divide_x = 1, divide_y = 1):
 def read_histogram(file_name, histogram_name):
     """Read a single histogram with the name histogram_name from the analysis.
     Function is called by read_histograms()."""
-    
+
     file_path = settings.base_dir + settings.ana_dir + "/" + settings.file_dir + file_name
 
     if os.path.exists(file_path):
@@ -220,11 +233,11 @@ def read_processes(histogram_name):
         hist.SetFillStyle  (objects.cfg["data"].as_int("fstyle"))
         hist.SetFillColor  (objects.cfg["data"].as_int("fcolor"))
         hist.SetLineStyle  (objects.cfg["data"].as_int("lstyle"))
-        hist.SetLineColor  (objects.cfg["data"].as_int("lcolor"))        
+        hist.SetLineColor  (objects.cfg["data"].as_int("lcolor"))
         hist.SetMarkerStyle(objects.cfg["data"]["mstyle"])
         hist.SetMarkerColor(objects.cfg["data"]["mcolor"])
         hist.SetMarkerSize (objects.cfg["data"]["msize"])
-        
+
         proc        = Process()
         proc.hist   = hist
         proc.fname  = objects.cfg["data"]["file"]
@@ -253,7 +266,7 @@ def read_processes(histogram_name):
             proc.nev    = objects.xs_cfg[background].as_int("Nev")
             proc.hist.Scale(proc.weight * proc.xs * settings.luminosity / proc.nev)
 
-            pads[plotting.pad_nr].background.append(proc)
+            pads[plotting.pad_nr].backgrounds.append(proc)
 
     # loop over signals and load histograms
     for signal in objects.cfg["signal"]:
@@ -276,15 +289,15 @@ def read_processes(histogram_name):
             proc.nev    = objects.xs_cfg[signal].as_int("Nev")
             proc.hist.Scale(proc.weight * proc.xs * settings.luminosity / proc.nev)
 
-            pads[plotting.pad_nr].signal.append(proc)
+            pads[plotting.pad_nr].signals.append(proc)
 
 
 
 def cd(pad_number):
     """Switch to pad with number pad_number"""
 
-    if pad_number > plotting.max_pad_nr:
-        print "Pad number is larger than the overall number of pads:", plotting.max_pad_nr
+    if pad_number > plotting.max_pad_nr or 1 > pad_number:
+        print "Pad number must be between", plotting.max_pad_nr, "and 1."
         return
 
     plotting.canvas.cd(pad_number)
@@ -292,20 +305,63 @@ def cd(pad_number):
 
 
 
-def delete_old_processes():
+def delete_pad_objects():
     """Deletes loaded data, background and signal processes of the current pad."""
-    
+
+    # data
     pads[plotting.pad_nr].data = None
-    pads[plotting.pad_nr].background = []
-    pads[plotting.pad_nr].signal = []
+
+    # backgrounds
+    del pads[plotting.pad_nr].backgrounds[:]
     pads[plotting.pad_nr].background_stack = None
+    del pads[plotting.pad_nr].ordered_backgrounds[:]
+
+    # signals
+    del pads[plotting.pad_nr].signals[:]
     pads[plotting.pad_nr].signal_stack = None
 
+    # misc
+    pads[plotting.pad_nr].legend = None
+    pads[plotting.pad_nr].ratio. = None
+    pads[plotting.pad_nr].latex = None
+    del pads[plotting.pad_nr].misc[:]
 
-def order_histograms(histogram_list):
-    """Order the list of histograms by their integral"""
 
-    return sorted(histogram_list, key=lambda hist: hist.Integral())
+def order_processes(process_list):
+    """Order the list of processes by the integral of their histogram."""
+
+    return sorted(process_list, key=lambda proc: proc.hist.Integral())
+
+
+
+def join_processes(process_list):
+    """Order the list of processes by the integral of their histograms."""
+
+    joined_process_list = []
+
+    while process_list:
+        # take the current label
+        hist = process_list[0].hist.Clone()
+        hist.SetName(hist.GetName()+str(id(hist)))
+        label = process_list[0].label
+
+        # loop over remaining process_list and add the ones with the same labels
+        for j in range(1, len(process_list)):
+            if process_list[j].label == label:
+
+                hist.Add(process_list[j].hist)
+                # remove added background
+                process_list.pop(j)
+
+        # create a copy of the process and set its histogram to the joined one
+        process_copy = copy.copy(process_list[0])
+        process_copy.hist = hist
+        # append the joined process to the list
+        joined_process_list.append(process_copy)
+        # remove the joined process
+        process_list.pop(0)
+
+    return joined_process_list
 
 
 
@@ -313,40 +369,19 @@ def stack_histograms():
     """Create a THStack from the histograms belonging to the current pad."""
 
     # stacking backgrounds
-    backgrounds = list(pads[plotting.pad_nr].background) # copy of list of backgrounds
-    joined_backgrounds = []
-    
-    while backgrounds:
-        # take the current label
-        hist = backgrounds[0].hist.Clone()
-        hist.SetName(hist.GetName()+str(id(hist)))
-        label = backgrounds[0].label
-        
-        # loop over remaining backgrounds and add the ones with the same labels
-        for j in range(1, len(backgrounds)):
-            if backgrounds[j].label == label:
-                
-                hist.Add(backgrounds[j].hist)
-                # remove added background
-                backgrounds.pop(j)
-
-        # append the joined background to the list
-        joined_backgrounds.append(hist)
-        # remove the joined background
-        backgrounds.pop(0)
-    
-
+    joined_backgrounds = join_processes(list(pads[plotting.pad_nr].backgrounds)) # copy of list of backgrounds
 
     # if there are actually any backgrounds ...
     if joined_backgrounds:
         # order the histograms according to their integral
-        joined_backgrounds = order_histograms(joined_backgrounds)
+        joined_backgrounds = order_processes(joined_backgrounds)
         # add the histograms to a THStack and save it in the plotting class
         background_stack = THStack(get_draw_object().GetName(), get_draw_object().GetName())
         for background in joined_backgrounds:
-            background_stack.Add(background)
+            background_stack.Add(background.hist)
         pads[plotting.pad_nr].background_stack = background_stack
-    
+        pads[plotting.pad_nr].ordered_backgrounds = joined_backgrounds
+
     # stacking signal on top of background
     # TODO
 
@@ -360,13 +395,13 @@ def rebin(number_of_bins):
         pads[plotting.pad_nr].data.hist.Rebin(number_of_bins)
 
     # rebin the individual backgrounds histograms
-    if pads[plotting.pad_nr].background:
-        for background in pads[plotting.pad_nr].background:
+    if pads[plotting.pad_nr].backgrounds:
+        for background in pads[plotting.pad_nr].backgrounds:
             background.hist.Rebin(number_of_bins)
 
     # rebin the individual signal histograms
-    if pads[plotting.pad_nr].signal:
-        for signal in pads[plotting.pad_nr].signal:
+    if pads[plotting.pad_nr].signals:
+        for signal in pads[plotting.pad_nr].signals:
             signal.hist.Rebin(number_of_bins)
 
     draw_histograms()
@@ -375,7 +410,7 @@ def rebin(number_of_bins):
 
 def update_pad():
     """Updates the pad and redraws the axis"""
-    
+
     if not gPad:
         print "No active pad."
         return
@@ -396,8 +431,8 @@ def get_draw_object():
     elif settings.draw_background and pads[plotting.pad_nr].background_stack:
         return pads[plotting.pad_nr].background_stack
     # then signal lines
-    elif settings.draw_signal and pads[plotting.pad_nr].signal:
-        return pads[plotting.pad_nr].signal[0].hist
+    elif settings.draw_signal and pads[plotting.pad_nr].signals:
+        return pads[plotting.pad_nr].signals[0].hist
     # and last data
     elif settings.draw_data and pads[plotting.pad_nr].data:
         return pads[plotting.pad_nr].data.hist
@@ -407,7 +442,7 @@ def get_draw_object():
 
 
 
-def maxy(maximum_value):
+def ymax(maximum_value):
     """Sets the highest value on the y-axis that is being shown."""
 
     hist = get_draw_object()
@@ -417,27 +452,90 @@ def maxy(maximum_value):
 
 
 
-def miny(minimum_value):
+def ymin(minimum_value):
     """Sets the lowest value on the y-axis that is being shown."""
+
+    # hist = get_draw_object()
+    # if hist:
+    # signal stack
+    if pads[plotting.pad_nr].signal_stack:
+        pads[plotting.pad_nr].signal_stack.SetMinimum(minimum_value)
+    # individual signals
+    if pads[plotting.pad_nr].signals:
+        for signal in pads[plotting.pad_nr].signals:
+            signal.hist.SetMinimum(minimum_value)
+    # background stack
+    if pads[plotting.pad_nr].background_stack:
+        pads[plotting.pad_nr].background_stack.SetMinimum(minimum_value)
+    # individual backgrounds
+    if pads[plotting.pad_nr].backgrounds:
+        for background in pads[plotting.pad_nr].backgrounds:
+            background.hist.SetMinimum(minimum_value)
+    # ordered backgrounds
+    if pads[plotting.pad_nr].ordered_backgrounds:
+        for background in pads[plotting.pad_nr].ordered_backgrounds:
+            background.hist.SetMinimum(minimum_value)
+    # data
+    if pads[plotting.pad_nr].data:
+        pads[plotting.pad_nr].data.hist.SetMinimum(minimum_value)
+
+    update_pad()
+
+
+
+def zoom(minimum_value, maximum_value):
+    """Shows the area of the x-axis specified by the minimum and maximum value."""
 
     hist = get_draw_object()
     if hist:
-        hist.SetMinimum(minimum_value)
+        hist.GetXaxis().SetRangeUser(minimum_value, maximum_value)
     update_pad()
 
 
 
 def logy(set_logy = True):
-    """Sets the scale of current pad to logarithmic.""" 
+    """Sets the scale of current pad to logarithmic."""
 
     if gPad:
+        # if get_draw_object().GetMinimum() <= 0:
+        # TODO
         gPad.SetLogy(set_logy)
+        draw_histograms()
         update_pad()
-        
 
 
 
-def title_x(x_axis_title):
+def header_text():
+    """Draws the luminosity and CMS text."""
+    
+    if not gPad:
+        print "No pad."
+        return
+
+    # clearing old latex objects
+    if pads[plotting.pad_nr].latex:
+        del pads[plotting.pad_nr].latex[:]
+
+    # text on the top left
+    left_text = TLatex(0.19, 0.955, settings.header_text)
+    left_text.SetNDC()
+    left_text.SetTextFont(42)
+    left_text.SetTextSize(0.05)
+    left_text.Draw()
+    pads[plotting.pad_nr].latex.append(left_text)
+
+    # text on the top right
+    right_text = TLatex(0.64, 0.955, "%.1f fb^{-1}  #sqrt{s} = 8 TeV" %(settings.luminosity/1000) )
+    #"#lower[-0.05]{#scale[0.5]{#int}} L #lower[-0.1]{=} %.1f fb^{-1}  #sqrt{s} = 8 TeV" %(settings.luminosity/1000) )
+    right_text.SetNDC()
+    right_text.SetTextFont(42)
+    right_text.SetTextSize(0.05)
+    right_text.Draw()
+    pads[plotting.pad_nr].latex.append(right_text)
+    
+                                            
+
+def xtitle(x_axis_title):
     """Sets the title on the x-axis to x_axis_title."""
 
     hist = get_draw_object()
@@ -446,12 +544,96 @@ def title_x(x_axis_title):
 
 
 
-def title_y(y_axis_title):
-    """Sets the title on the y-axis to y_axis_title."""
+def ytitle(y_axis_title = ""):
+    """Sets the title on the y-axis to y_axis_title. By default this is the number
+    of events and the bin width."""
 
     hist = get_draw_object()
     if hist:
-        hist.GetYaxis().SetTitle(y_axis_title)
+        if y_axis_title:
+            hist.GetYaxis().SetTitle(y_axis_title)
+
+        else:
+            # parse x-axis title for unit
+            units = ["GeV", "TeV", "cm", "rad"]
+            # take last part of the title
+            x_axis_unit = get_draw_object().GetXaxis().GetTitle().split()[::-1][0]
+            unit = ""
+
+            for u in units:
+                if u in x_axis_unit:
+                    unit = u
+            
+            # retrieve bin width
+            bin_width = hist.GetXaxis().GetBinWidth(hist.GetXaxis().GetFirst())
+
+            # if there is no unit and width is 1, dont add it to the text
+            if unit is "" and bin_width == 1:
+                y_axis_title = "Events"
+            else:
+                y_axis_title = "Events / {0:.2g} ".format(bin_width) + unit
+
+            hist.GetYaxis().SetTitle(y_axis_title)
+
+
+
+
+def legend(minimum_bin_heigth = 1e-3, number_of_columns = 1, x1 = None, y1 = None, x2 = None, y2 = None):
+    """Draws a legend containing the process labels. Same labels, meaning
+    stacked histograms, are only drawn once."""
+
+    # delete old legend
+    if pads[plotting.pad_nr].legend:
+        pads[plotting.pad_nr].legend = None
+
+    # setting the unspecified size variables
+    if x1 is None:
+        x1 = 0.67
+    if y1 is None:
+        y1 = 0.92
+    if x2 is None:
+        x2 = 0.91
+    if y2 is None:
+        # count number of entires
+        y2 = 0.92
+        size_per_entry = 0.08
+        if pads[plotting.pad_nr].ordered_backgrounds and settings.draw_background:
+            y2 -= size_per_entry * len(pads[plotting.pad_nr].ordered_backgrounds)
+
+        if pads[plotting.pad_nr].data and settings.draw_data:
+            y2 -= size_per_entry
+
+        if pads[plotting.pad_nr].signals and settings.draw_signal:
+            y2 -= size_per_entry * len(pads[plotting.pad_nr].signals)
+
+    legend = TLegend(x1, y1, x2, y2)
+    entry_count = 0
+
+    # take the ordered backgrounds
+    backgrounds = pads[plotting.pad_nr].ordered_backgrounds
+    if backgrounds and settings.draw_background:
+        for background in backgrounds[::-1]:
+            legend.AddEntry(background.hist, background.label, "f")
+
+    data = pads[plotting.pad_nr].data
+    if data and settings.draw_data:
+        legend.AddEntry(data.hist, data.label, "pe")
+
+    # copy and order the signals
+    signals = order_processes(list(pads[plotting.pad_nr].signals))
+    if signals and settings.draw_signal:
+        for signal in signals:
+            legend.AddEntry(signal.hist, signal.label, "l")
+
+    # legend settings and drawing
+    legend.SetFillColor(kWhite)
+    legend.SetFillStyle(0)
+    legend.SetBorderSize(0)
+    legend.SetTextFont(42)
+    legend.SetNColumns(number_of_columns)
+    gPad.cd()
+    legend.Draw()
+    pads[plotting.pad_nr].legend = legend
 
 
 
@@ -459,7 +641,7 @@ def draw_histograms():
     """Draw data, background and signal histograms."""
 
     # clear pad before drawing
-    gPad.cd()
+    cd(plotting.pad_nr + 1) # pad_nr starts at 0
     gPad.Clear()
 
     # create stacked background and signal histograms
@@ -467,7 +649,7 @@ def draw_histograms():
 
     # plotting stacked backgrounds
     same = ""
-    # signal stack is drawn first
+    # signal is drawn first
     if settings.stack_signal and settings.draw_signal and pads[plotting.pad_nr].signal_stack:
         pads[plotting.pad_nr].signal_stack.Draw("HIST")
         same = "same"
@@ -477,17 +659,109 @@ def draw_histograms():
         pads[plotting.pad_nr].background_stack.Draw("HIST" + same)
         same = "same"
 
-    if settings.draw_signal and not settings.stack_signal and pads[plotting.pad_nr].signal:
+    if settings.draw_signal and not settings.stack_signal and pads[plotting.pad_nr].signals:
         # then signal lines
-        for signal in pads[plotting.pad_nr].signal:
+        for signal in pads[plotting.pad_nr].signals:
             signal.hist.Draw("HIST" + same)
         same = "same"
 
     if settings.draw_data and pads[plotting.pad_nr].data:
         # and last data
         pads[plotting.pad_nr].data.hist.Draw("EP" + same)
-    
+
     update_pad()
+
+
+
+def ratio():
+    """Draws the ratio of the histogram in an additional pad below."""
+
+    if not pads[plotting.pad_nr].ratio:
+        pads[plotting.pad_nr].ratio = Ratio()
+
+    # sum up the backgrounds
+    backgound_sum = None
+    if pads[plotting.pad_nr].backgrounds:
+        background_sum = pads[plotting.pad_nr].backgrounds[0].hist.Clone()
+    if not background_sum:
+        print "There are no backgrounds."
+        return
+
+    for background in pads[plotting.pad_nr].backgrounds:
+        background_sum.Add(background.hist)
+
+    draw_object = get_draw_object()
+
+    if not pads[plotting.pad_nr].ratio.pad:
+        # setup the window and pads to draw a ratio
+        cd(plotting.pad_nr + 1)
+
+        # expand canvas
+        expansion_factor = 1.25
+        plotting.canvas.SetWindowSize(850, int(floor(600 * expansion_factor)))
+
+        # resize drawing pad
+        # base length - base length / expansion factor
+        y_ndc = 0.97 - (0.97 / expansion_factor)
+        gPad.SetPad(0.01, y_ndc, 0.98, 0.98)
+        update_pad()
+
+        # draw new pad for ratio on canvas
+        plotting.canvas.cd()
+        # base length - drawing pad bottm margin * base length / expansion factor
+        y_ndc = 0.97 - ((1 - gPad.GetBottomMargin()) * 0.97 / expansion_factor)
+        ratio_pad = TPad("ratiopad" + str(plotting.pad_nr), "ratiopad" + str(plotting.pad_nr),
+                         0.01, 0.01, 0.98, y_ndc)
+        # adjust settings, due to different scale
+        ratio_pad.SetTopMargin(0.0)
+        ratio_pad.SetBottomMargin(0.30)
+        ratio_pad.Draw()
+        pads[plotting.pad_nr].ratio.pad = ratio_pad
+
+    
+    pads[plotting.pad_nr].ratio.pad.cd()
+
+    # calculate the ratio
+    ratio = pads[plotting.pad_nr].data.hist.Clone()
+    ratio.Divide(background_sum)
+    ratio.SetMaximum(-1111)
+    ratio.SetMinimum(-1111)
+
+    # y axis
+    ratio.GetYaxis().SetTitle("Data / MC");
+    ratio.GetYaxis().SetNdivisions(504)
+    ratio.GetYaxis().CenterTitle()
+
+    ratio.GetYaxis().SetTitleOffset(0.45)
+    ratio.GetYaxis().SetTitleSize(0.13)
+    ratio.GetYaxis().SetLabelSize(0.13)
+
+    # x axis
+    ratio.GetXaxis().SetRangeUser(draw_object.GetXaxis().GetBinLowEdge(draw_object.GetXaxis().GetFirst()),
+                                  draw_object.GetXaxis().GetBinLowEdge(draw_object.GetXaxis().GetLast()))
+    ratio.GetXaxis().SetTitle(draw_object.GetXaxis().GetTitle())
+    # ratio.GetXaxis().CenterTitle()
+
+    ratio.GetXaxis().SetTitleOffset(0.95)
+    ratio.GetXaxis().SetTitleSize(0.15)
+    ratio.GetXaxis().SetLabelSize(0.15)
+    ratio.GetXaxis().SetNdivisions(507)
+
+    ratio.Draw("EP")
+    pads[plotting.pad_nr].ratio.hist = ratio
+
+    # line
+    line = TLine(ratio.GetXaxis().GetBinLowEdge(ratio.GetXaxis().GetFirst()), 1.,
+                 ratio.GetXaxis().GetBinUpEdge(ratio.GetXaxis().GetLast()), 1.);
+    line.SetLineWidth(2);
+    line.SetLineStyle(2);
+    line.SetLineColor(kRed+1);
+    line.Draw();
+    pads[plotting.pad_nr].ratio.line = line
+
+    update_pad()
+
+    cd(plotting.pad_nr + 1) # pad_nr starts at 0
 
 
 
@@ -498,9 +772,10 @@ def plot(histogram_name):
     if plotting.canvas is None:
         create_canvas()
 
-    delete_old_processes() # delete old processes and stacks of the current pad
+    delete_pad_objects() # delete old objects of the pad
     read_processes(histogram_name) # load histogram of the processes
     draw_histograms() # draw the histograms
+    cd(plotting.pad_nr + 1) # pad_nr starts at 0
 
 
 
@@ -537,13 +812,13 @@ def export(function_title = "", export_selection = True, export_setup = False):
     exclusion_list = ["quit", "export"]
     line_buffer = []
     plot_index = 0
-    
+
     selection_index = 0
-    
+
     # find the plot and selection commands
     for i in reversed(range(readline.get_current_history_length())):
         item = readline.get_history_item(i)
-        
+
         # skip lines like quit() or export() to buffer
         for exclusion in exclusion_list:
             if item.startswith(exclusion):
@@ -564,10 +839,10 @@ def export(function_title = "", export_selection = True, export_setup = False):
 
     # add some additional lines if the options are given
     if export_selection:
-        line_buffer.append("selection(" + settings.ana_dir + ")")
+        line_buffer.append("selection(\"" + settings.ana_dir + "\")")
 
     if export_setup:
-        line_buffer.append("selection(" + objects.cfg.filename.split("/")[2] + ")")
+        line_buffer.append("selection(\"" + objects.cfg.filename.split("/")[2] + "\")")
 
     # get function title
     if function_title == "":
