@@ -13,7 +13,7 @@ if startup_file and os.path.isfile(startup_file):
 # loading bROT
 print "Loading bROT ..."
 execfile("main.py")
+
+print "Loading exported functions ..."
+execfile("export.py")
 brot_init()
-
-
-
