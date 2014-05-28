@@ -322,7 +322,7 @@ def delete_pad_objects():
 
     # misc
     pads[plotting.pad_nr].legend = None
-    pads[plotting.pad_nr].ratio. = None
+    pads[plotting.pad_nr].ratio = None
     pads[plotting.pad_nr].latex = None
     del pads[plotting.pad_nr].misc[:]
 
@@ -634,6 +634,39 @@ def legend(minimum_bin_heigth = 1e-3, number_of_columns = 1, x1 = None, y1 = Non
     gPad.cd()
     legend.Draw()
     pads[plotting.pad_nr].legend = legend
+
+
+
+def accumulate_histogram(histogram):
+    """Transforms one histogram into a cumulative distribution."""
+    
+    for i in range(1, histogram.GetXaxis().GetNbins()):
+        integral_error = Double(0)
+        integral = histogram.IntegralAndError(i,
+                                              histogram.GetXaxis().GetNbins(),
+                                              integral_error)
+
+        histogram.SetBinContent(i, integral)
+        histogram.SetBinError(i, integral_error)
+
+
+
+def cumulative():
+    """Takes the histograms of the current pad transforms them into cumulative
+    distributions."""
+
+    if not get_draw_object():
+        print "Use plot(histogram_name) first."
+        return
+        
+    if pads[plotting.pad_nr].data:
+        accumulate_histogram(pads[plotting.pad_nr].data.hist)
+    for background in pads[plotting.pad_nr].backgrounds:
+        accumulate_histogram(background.hist)
+    for signal in pads[plotting.pad_nr].signals:
+        accumulate_histogram(signal.hist)
+
+    draw_histograms()
 
 
 
