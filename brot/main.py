@@ -357,7 +357,7 @@ def join_processes(process_list):
     while process_list:
         # take the current label
         hist = process_list[0].hist.Clone()
-        hist.SetName(hist.GetName()+str(id(hist)))
+        hist.SetName(hist.GetName())#+str(id(hist)))
         label = process_list[0].label
 
         # loop over remaining process_list and add the ones with the same labels
@@ -387,8 +387,8 @@ def stack_processes(process_list):
     # if there are actually any processes ...
     if process_list:
         # add the histograms to a THStack and save it in the plot class
-        process_stack = THStack("stack" + str(id(process_list[0].hist)),
-                                "stack" + str(id(process_list[0].hist)))
+        process_stack = THStack(process_list[0].hist.GetName(), process_list[0].hist.GetName()) #"stack" + str(id(process_list[0].hist)),
+                                #"stack" + str(id(process_list[0].hist)))
         for process in process_list:
             process_stack.Add(process.hist)
             
@@ -838,6 +838,20 @@ def plot(histogram_name):
 
 
 
+def save(file_name = ""):
+    """Saves the current TCanvas into a file with the name file_name. By default,
+    the histogram's name is being used and saved as a '.pdf' to the subfolder 'plots'."""
+    
+    if not file_name:
+        file_name = "plots/" + get_draw_object().GetName().replace(settings.hist_prefix, "") + ".pdf"
+    
+    path = "./" + file_name.rsplit("/", 1)[0]
+    if not os.path.exists(path):
+        os.makedirs(path)
+    canvas.canvas.SaveAs(file_name)
+
+    
+
 def remove_export_function(function_title):
     """Removes the function with the title function_title from the 'export.py' file."""
 
@@ -920,6 +934,8 @@ def export(function_title = "", export_selection = True, export_setup = False):
 
     # write function to 'export.py'
     with open("export.py", "a") as f:
+        f.write("\n")
         f.write("def " + function_title + "():\n")
         for line in reversed(line_buffer):
             f.write("    " + line + "\n")
+
