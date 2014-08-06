@@ -201,8 +201,8 @@ def create_canvas(divide_x = 1, divide_y = 1):
         return
 
     # destroy old canvas
-    if not canvas.canvas:
-        canvas.canvas = None
+    if canvas.canvas:
+       canvas.canvas = None
 
     # create canvas (used globally)
     x_size = 850 * divide_x
@@ -387,7 +387,8 @@ def stack_processes(process_list):
     # if there are actually any processes ...
     if process_list:
         # add the histograms to a THStack and save it in the plot class
-        process_stack = THStack("stack"+str(id(process_list[0].hist)), "stack")
+        process_stack = THStack("stack" + str(id(process_list[0].hist)),
+                                "stack" + str(id(process_list[0].hist)))
         for process in process_list:
             process_stack.Add(process.hist)
             
@@ -786,8 +787,7 @@ def ratio():
     ratio.GetYaxis().SetLabelSize(0.13)
 
     # x axis
-    ratio.GetXaxis().SetRangeUser(draw_object.GetXaxis().GetBinLowEdge(draw_object.GetXaxis().GetFirst()),
-                                  draw_object.GetXaxis().GetBinLowEdge(draw_object.GetXaxis().GetLast()))
+    ratio.GetXaxis().SetRange(draw_object.GetXaxis().GetFirst(), draw_object.GetXaxis().GetLast())
     ratio.GetXaxis().SetTitle(draw_object.GetXaxis().GetTitle())
     # ratio.GetXaxis().CenterTitle()
 
@@ -887,6 +887,8 @@ def export(function_title = "", export_selection = True, export_setup = False):
 
         # if the plot(...) command has been found, stop
         if item.startswith("plot("):
+            # get the title of the histogram
+            function_title = item.split('"', 1)[1].rsplit('"', 1)[0]
             plot_index = i
             break
 
@@ -901,11 +903,6 @@ def export(function_title = "", export_selection = True, export_setup = False):
 
     if export_setup:
         line_buffer.append("selection(\"" + objects.cfg.filename.split("/")[2] + "\")")
-
-    # get function title
-    if function_title == "":
-        function_title = get_draw_object().GetName().replace(settings.hist_prefix, "")
-
 
     # checking for existing function in 'export.py'
     with open("export.py", "r") as f:
@@ -923,7 +920,6 @@ def export(function_title = "", export_selection = True, export_setup = False):
 
     # write function to 'export.py'
     with open("export.py", "a") as f:
-        f.write("\n")
         f.write("def " + function_title + "():\n")
         for line in reversed(line_buffer):
             f.write("    " + line + "\n")
