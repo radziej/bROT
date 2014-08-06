@@ -16,7 +16,7 @@ from collections import namedtuple
 from ROOT import *
 
 # importing local libraries
-import tdrstyle
+import style
 from lib.configobj import ConfigObj
 from lib.validate import Validator
 
@@ -172,7 +172,7 @@ def selection(analysis_directory):
 def brot_init():
     """Initialize default settings for the bROT package."""
 
-    tdrstyle.set_tdr_style() # using TDR style for plotting
+    style.set_tdr_style() # using TDR style for plotting
     setup("plot.cfg") # setup using the default plot.cfg
     selection("pytest")
 
@@ -445,7 +445,7 @@ def ymax(maximum_value):
 
 
 
-def ymin(minimum_value = -1111):
+def ymin(minimum_value):
     """Sets the lowest value on the y-axis that is being shown."""
 
     # has to be set for all draw objects to prevent error messages when turning
