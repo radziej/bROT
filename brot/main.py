@@ -10,6 +10,7 @@ import copy
 import math
 import readline
 import itertools
+from array import array
 from collections import namedtuple
 
 # importing root functionality
@@ -51,9 +52,15 @@ class Settings():
         self.draw_data          = True # do or dont draw
         self.draw_background    = True # do or dont draw
         self.draw_signal        = True # do or dont draw
+        self.draw_systematics   = True # do or dont draw
 
         self.do_chi2quantil     = False # draw chi2 errors for data points
         self.stack_signal       = False # do or dont stack signal on background
+
+        # bin width to which variable bins are normalized to
+        # for values equal or less than 0.0, smallest bin width in histogram is used
+        self.bin_normalization_width = 0.0
+        
 
 settings = Settings()
 
@@ -75,6 +82,7 @@ class Ratio():
     def __init__(self):
         self.pad        = None  # the TPad of the ratio
         self.hist       = None  # ratio TH1D histogram
+        self.systematics= None  # systematics ratio TH1D histogram
         self.line       = None  # TLine drawn at 1.
 
 
@@ -85,13 +93,15 @@ class Pad():
         self.raw_data           = []   # process : data
         self.raw_backgrounds    = []   # process : background
         self.raw_signals        = []   # process : signal
+        self.raw_systematics    = []   # process : systematic
 
         # composed, aka merged and ordered processes
         self.data                = None # process : data
         self.backgrounds         = []   # process : background
         self.signals             = []   # process : signal
+        self.systematics         = None # process : systematic
 
-        self.ordered_processes       = []   # order of plotting
+        self.ordered_processes   = []   # order of plotting
 
         # misc drawing objects
         self.legend              = None # tlegend
@@ -148,9 +158,14 @@ def setup(config_file):
     settings.cms_text = objects.cfg["general"]["cms_text"]
 
     # reading switches
+    #
     settings.chi2_quantile = objects.cfg["switches"].as_float("chi2_quantile")
+    # draw options
     settings.draw_data = objects.cfg["switches"].as_bool("draw_data")
     settings.stack_signal = objects.cfg["switches"].as_bool("stack_signal")
+    settings.draw_systematics = objects.cfg["switches"].as_bool("draw_systematics")
+
+    settings.bin_normalization_width = objects.cfg["switches"].as_float("bin_normalization_width")
 
     # enable quadratic uncertainty handling
     TH1.SetDefaultSumw2(True)
@@ -191,7 +206,7 @@ def clear_and_prepare_pads(max_pad_number):
         pads.append(Pad())
 
 
-
+        
 def create_canvas(divide_x = 1, divide_y = 1):
     """Create a canvas and divide it according to divide_x and divide_y. Default values are 1, 1."""
 
@@ -274,22 +289,22 @@ def read_processes(histogram_name):
 
 
     # loop over backgrounds and load histograms
-    for background in objects.cfg["background"].sections:
+    for background in objects.cfg["backgrounds"].sections:
         hist = read_histogram(background + ".root", histogram_name)
         if hist:
-            hist.SetFillStyle  (objects.cfg["background"][background].as_int("fstyle"))
-            hist.SetFillColor  (objects.cfg["background"][background].as_int("fcolor"))
-            hist.SetLineStyle  (objects.cfg["background"][background].as_int("lstyle"))
-            hist.SetLineColor  (objects.cfg["background"][background].as_int("fcolor"))
-            hist.SetMarkerStyle(objects.cfg["background"][background].as_int("mstyle"))
-            hist.SetMarkerColor(objects.cfg["background"][background].as_int("mcolor"))
-            hist.SetMarkerSize (objects.cfg["background"][background].as_float("msize"))
+            hist.SetFillStyle  (objects.cfg["backgrounds"][background].as_int("fstyle"))
+            hist.SetFillColor  (objects.cfg["backgrounds"][background].as_int("fcolor"))
+            hist.SetLineStyle  (objects.cfg["backgrounds"][background].as_int("lstyle"))
+            hist.SetLineColor  (objects.cfg["backgrounds"][background].as_int("fcolor"))
+            hist.SetMarkerStyle(objects.cfg["backgrounds"][background].as_int("mstyle"))
+            hist.SetMarkerColor(objects.cfg["backgrounds"][background].as_int("mcolor"))
+            hist.SetMarkerSize (objects.cfg["backgrounds"][background].as_float("msize"))
 
             proc        = Process()
             proc.hist   = hist
             proc.style  = "HIST"
             proc.fname  = background
-            proc.label  = objects.cfg["background"][background]["label"]
+            proc.label  = objects.cfg["backgrounds"][background]["label"]
             proc.xs     = objects.xs_cfg[background].as_float("xs")
             proc.weight = objects.xs_cfg[background].as_float("weight")
             proc.nev    = objects.xs_cfg[background].as_int("Nev")
@@ -298,28 +313,43 @@ def read_processes(histogram_name):
             pads[canvas.pad_nr].raw_backgrounds.append(proc)
 
     # loop over signals and load histograms
-    for signal in objects.cfg["signal"].sections:
+    for signal in objects.cfg["signals"].sections:
         hist = read_histogram(signal + ".root", histogram_name)
         if hist:
-            hist.SetFillStyle  (objects.cfg["signal"][signal].as_int("fstyle"))
-            hist.SetFillColor  (objects.cfg["signal"][signal].as_int("fcolor"))
-            hist.SetLineStyle  (objects.cfg["signal"][signal].as_int("lstyle"))
-            hist.SetLineColor  (objects.cfg["signal"][signal].as_int("lcolor"))
-            hist.SetMarkerStyle(objects.cfg["signal"][signal].as_int("mstyle"))
-            hist.SetMarkerColor(objects.cfg["signal"][signal].as_int("mcolor"))
-            hist.SetMarkerSize (objects.cfg["signal"][signal].as_float("msize"))
+            hist.SetFillStyle  (objects.cfg["signals"][signal].as_int("fstyle"))
+            hist.SetFillColor  (objects.cfg["signals"][signal].as_int("fcolor"))
+            hist.SetLineStyle  (objects.cfg["signals"][signal].as_int("lstyle"))
+            hist.SetLineColor  (objects.cfg["signals"][signal].as_int("lcolor"))
+            hist.SetMarkerStyle(objects.cfg["signals"][signal].as_int("mstyle"))
+            hist.SetMarkerColor(objects.cfg["signals"][signal].as_int("mcolor"))
+            hist.SetMarkerSize (objects.cfg["signals"][signal].as_float("msize"))
 
             proc        = Process()
             proc.hist   = hist
             proc.style  = "HIST"
             proc.fname  = signal
-            proc.label  = objects.cfg["signal"][signal]["label"]
+            proc.label  = objects.cfg["signals"][signal]["label"]
             proc.xs     = objects.xs_cfg[signal].as_float("xs")
             proc.weight = objects.xs_cfg[signal].as_float("weight")
             proc.nev    = objects.xs_cfg[signal].as_int("Nev")
             proc.hist.Scale(proc.weight * proc.xs * settings.luminosity / proc.nev)
 
             pads[canvas.pad_nr].raw_signals.append(proc)
+
+    # loop over systematics and load histograms
+    for systematic in objects.cfg["systematics"].sections:
+        hist = read_histogram(systematic + ".root", histogram_name)
+        if hist:
+            hist.SetFillStyle  (objects.cfg["systematics"].as_int("fstyle"))
+            hist.SetFillColor  (objects.cfg["systematics"].as_int("fcolor"))
+            
+            proc        = Process()
+            proc.hist   = hist
+            proc.style  = "E2"
+            proc.fname  = systematic
+            proc.label  = objects.cfg["systematics"]["label"]
+            
+            pads[canvas.pad_nr].raw_systematics.append(proc)
 
 
 
@@ -349,8 +379,8 @@ def order_processes(process_list):
 
 
 
-def join_processes(process_list):
-    """Order the list of processes by the integral of their histograms."""
+def merge_processes(process_list, style="linear"):
+    """Merge the processes that carry the same label."""
 
     joined_processes = []
 
@@ -364,7 +394,16 @@ def join_processes(process_list):
         for j in range(1, len(process_list)):
             if process_list[j].label == label:
 
-                hist.Add(process_list[j].hist)
+                # add the bin contents linearly
+                if style == "linear":
+                    hist.Add(process_list[j].hist)
+
+                # add the bin contents quadratically
+                if style == "quadratic":
+                    for i in range(1, hist.GetXaxis().GetNbins()):
+                        hist.SetBinContent(i, sqrt(pow(hist.GetBinContent(i), 2) +
+                                                   pow(process_list[j].hist.GetBinContent(i), 2)))
+                        
                 # remove added background
                 process_list.pop(j)
 
@@ -400,15 +439,38 @@ def stack_processes(process_list):
 
 
 
-def rebin(number_of_bins):
-    """Rebin the data, background and signals."""
-
-    for process in list(itertools.chain(pads[canvas.pad_nr].raw_data,
+def rebin(bins):
+    """Rebin the data, background and signals. If 'bins' is an integer, it merges
+    the respective number of bins. If it is an array, the bin borders are
+    adjusted individually."""
+    
+    # merge bins
+    if type(bins) is int:
+        for process in list(itertools.chain(pads[canvas.pad_nr].raw_data,
                                         pads[canvas.pad_nr].raw_backgrounds,
                                         pads[canvas.pad_nr].raw_signals)):
-        process.hist.Rebin(number_of_bins)
+            process.hist.Rebin(bins)
 
-    draw_processes()
+        # redraw processes
+        draw_processes()
+
+    # variable binning
+    if type(bins) is list:
+        for process in list(itertools.chain(pads[canvas.pad_nr].raw_data,
+                                        pads[canvas.pad_nr].raw_backgrounds,
+                                        pads[canvas.pad_nr].raw_signals)):
+
+            # replace old histograms
+            process.hist = process.hist.Rebin(int(len(bins)-1), # arraylength - 1
+                                              process.hist.GetName(), # new name of histogram
+                                              array("d", bins)) # array of bin (lower) edges
+
+        # create merged processes
+        order_all_processes()
+        # scales bin heights if bin widths are variable
+        scale_bin_heights()
+        # redraw
+        draw()
 
 
 
@@ -491,20 +553,20 @@ def cms_text():
     if pads[canvas.pad_nr].latex:
         del pads[canvas.pad_nr].latex[:]
 
-    # text on the top left
-    left_text = TLatex(0.19, 0.955, settings.cms_text)
-    left_text.SetNDC()
-    left_text.SetTextFont(42)
-    left_text.SetTextSize(0.05)
-    left_text.Draw()
-    pads[canvas.pad_nr].latex.append(left_text)
+    # cms text
+    cms_text = TLatex(0.16, 0.955, "#font[62]{CMS} #scale[0.8]{#font[52]{" + settings.cms_text + "}}")
+    cms_text.SetNDC()
+    cms_text.SetTextFont(42)
+    cms_text.SetTextSize(0.05)
+    cms_text.Draw()
+    pads[canvas.pad_nr].latex.append(cms_text)
 
     # text on the top right
-    right_text = TLatex(0.64, 0.955, "{0:.1f}".format(settings.luminosity/1000) + " fb^{-1} (8 TeV)" )
+    right_text = TLatex(0.74, 0.955, "{0:.1f}".format(settings.luminosity/1000) + " fb^{-1} (8 TeV)" )
     #"#lower[-0.05]{#scale[0.5]{#int}} L #lower[-0.1]{=} %.1f fb^{-1}  #sqrt{s} = 8 TeV" %(settings.luminosity/1000) )
     right_text.SetNDC()
     right_text.SetTextFont(42)
-    right_text.SetTextSize(0.05)
+    right_text.SetTextSize(0.04)
     right_text.Draw()
     pads[canvas.pad_nr].latex.append(right_text)
 
@@ -646,7 +708,24 @@ def cumulative():
 
 
 
-def compose_processes():
+def order_all_processes():
+    """Merges and orderes processes and stores them in the pads class."""
+
+    if pads[canvas.pad_nr].raw_backgrounds:
+        pads[canvas.pad_nr].backgrounds = order_processes(merge_processes(list(pads[canvas.pad_nr].raw_backgrounds)))
+    
+    if pads[canvas.pad_nr].raw_data:
+        pads[canvas.pad_nr].data = merge_processes(list(pads[canvas.pad_nr].raw_data))[0]
+
+    if pads[canvas.pad_nr].raw_signals:
+        pads[canvas.pad_nr].signals = order_processes(list(pads[canvas.pad_nr].raw_signals))
+
+    if pads[canvas.pad_nr].raw_systematics:
+        pads[canvas.pad_nr].systematics = merge_processes(list(pads[canvas.pad_nr].raw_systematics), "quadratic")[0]
+
+
+
+def compose_draw_objects():
     """Gather information and prepare processes to be drawn."""
 
     # reset plotting order
@@ -654,10 +733,9 @@ def compose_processes():
         pads[canvas.pad_nr].ordered_processes = []
 
     # backgrounds
-    if pads[canvas.pad_nr].raw_backgrounds:
-        pads[canvas.pad_nr].backgrounds = order_processes(join_processes(list(pads[canvas.pad_nr].raw_backgrounds)))
+    if pads[canvas.pad_nr].backgrounds:
 
-        # creatre THStack
+        # create THStack
         stacked_backgrounds = Process()
         stacked_backgrounds.hist = stack_processes(list(pads[canvas.pad_nr].backgrounds))
         stacked_backgrounds.label = "Stacked Backgrounds"
@@ -665,11 +743,30 @@ def compose_processes():
 
         if settings.draw_background:
             pads[canvas.pad_nr].ordered_processes.append(stacked_backgrounds)
-            
+
+    # systematics
+    if pads[canvas.pad_nr].systematics:
+
+        # check if systematics should be drawn
+        if settings.draw_systematics:
+
+            # create systematics uncertainty band process
+            uncertainty_band = Process()
+            uncertainty_band.hist = pads[canvas.pad_nr].systematics.hist
+            uncertainty_band.label = pads[canvas.pad_nr].systematics.label
+            uncertainty_band.style = pads[canvas.pad_nr].systematics.style
+
+            # calculate and store uncertainty band
+            stack = pads[canvas.pad_nr].ordered_processes[0].hist.GetStack().Last()
+            for i in range(1, uncertainty_band.hist.GetXaxis().GetNbins()):
+                uncertainty_band.hist.SetBinError(i, uncertainty_band.hist.GetBinContent(i) *
+                                                     stack.GetBinContent(i))
+                uncertainty_band.hist.SetBinContent(i, stack.GetBinContent(i))
+
+            pads[canvas.pad_nr].ordered_processes.append(uncertainty_band)
 
     # data
-    if pads[canvas.pad_nr].raw_data:
-        pads[canvas.pad_nr].data = join_processes(list(pads[canvas.pad_nr].raw_data))[0]
+    if pads[canvas.pad_nr].data:
 
         # append data
         if settings.draw_data:
@@ -681,8 +778,7 @@ def compose_processes():
             pads[canvas.pad_nr].ordered_processes.append(pads[canvas.pad_nr].data)
 
     # signals
-    if pads[canvas.pad_nr].raw_signals:
-        pads[canvas.pad_nr].signals = order_processes(list(pads[canvas.pad_nr].raw_signals))
+    if pads[canvas.pad_nr].signals:
 
         # stack signals on top of background if required 
         if settings.stack_signal:
@@ -703,23 +799,62 @@ def compose_processes():
 
 
 
-def draw_processes():
-    """Draw data, background and signal histograms."""
+def scale_bin_heights(base_width = 1.0):
+    """Scales the bin heights according their width relative to the 'base_width'."""
+
+    # use default value if no base_width is supplied
+    if base_width <= 0.0:
+        base_width = settings.bin_normalization_width
+        # if default value is set to 0.0 (or less), use smallest bin width
+        if base_width <= 0.0:
+            x_axis = get_draw_object().GetXaxis()
+            for i in range(1, x_axis.GetNbins()):
+                base_width = min(base_width, x_axis.GetBinWidth(i))
+
+    # scale the bin content and error
+    for process in list(itertools.chain([pads[canvas.pad_nr].data],
+                                        pads[canvas.pad_nr].backgrounds,
+                                        pads[canvas.pad_nr].signals)):
+        hist = process.hist
+        for i in range(1, hist.GetNbinsX()+1):
+            scale_factor = base_width / hist.GetBinWidth(i)
+            hist.SetBinContent(i, hist.GetBinContent(i) * scale_factor)
+            hist.SetBinError(i, hist.GetBinError(i) * scale_factor)
+
+
+
+def draw():
+    """Composes the drawing objects and plots them."""
 
     # clear pad before drawing
     cd(canvas.pad_nr + 1) # pad_nr starts at 0
     gPad.Clear()
 
     # collect information and set up processes for drawing
-    compose_processes()
+    compose_draw_objects()
 
     # plot all the backgrounds
     same = ""
     for process in pads[canvas.pad_nr].ordered_processes:
+        print process.style + same
         process.hist.Draw(process.style + same)
         same = "same"
 
     update_pad()
+
+
+
+def draw_processes():
+    """Draw data, background and signal histograms."""
+
+    # ensure working on the right pad
+    # cd(canvas.pad_nr + 1) # pad_nr starts at 0
+
+    # merge and order processes
+    order_all_processes()
+
+    # draw
+    draw()
 
 
 
@@ -845,7 +980,7 @@ def save(file_name = ""):
     if not file_name:
         file_name = "plots/" + get_draw_object().GetName().replace(settings.hist_prefix, "") + ".pdf"
     
-    path = "./" + file_name.rsplit("/", 1)[0]
+    path = ("./" + file_name).rsplit("/", 1)[0]
     if not os.path.exists(path):
         os.makedirs(path)
     canvas.canvas.SaveAs(file_name)
