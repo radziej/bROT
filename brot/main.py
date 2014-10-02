@@ -443,6 +443,10 @@ def rebin(bins):
     """Rebin the data, background and signals. If 'bins' is an integer, it merges
     the respective number of bins. If it is an array, the bin borders are
     adjusted individually."""
+
+    if pads[canvas.pad_nr].raw_systematics and settings.draw_systematics:
+        print "Cannot call rebin() when showing the systematics."
+        return
     
     # merge bins
     if type(bins) is int:
@@ -542,33 +546,70 @@ def logy(set_logy = True):
 
 
 
-def cms_text():
+def set_text_style(tlatex, size = 0.05):
+    """Sets the default style for TLatex text objects."""
+    
+    tlatex.SetNDC()
+    tlatex.SetTextFont(42)
+    tlatex.SetTextSize(size)
+
+
+
+def cms_text(position = "top", additional_text = ""):
     """Draws the luminosity and CMS text."""
 
     if not gPad:
         print "No pad."
         return
 
+    cd(1)
+
     # clearing old latex objects
     if pads[canvas.pad_nr].latex:
         del pads[canvas.pad_nr].latex[:]
 
-    # cms text
-    cms_text = TLatex(0.16, 0.955, "#font[62]{CMS} #scale[0.8]{#font[52]{" + settings.cms_text + "}}")
-    cms_text.SetNDC()
-    cms_text.SetTextFont(42)
-    cms_text.SetTextSize(0.05)
-    cms_text.Draw()
-    pads[canvas.pad_nr].latex.append(cms_text)
-
-    # text on the top right
+    # luminosity text on the top right
     right_text = TLatex(0.74, 0.955, "{0:.1f}".format(settings.luminosity/1000) + " fb^{-1} (8 TeV)" )
     #"#lower[-0.05]{#scale[0.5]{#int}} L #lower[-0.1]{=} %.1f fb^{-1}  #sqrt{s} = 8 TeV" %(settings.luminosity/1000) )
-    right_text.SetNDC()
-    right_text.SetTextFont(42)
-    right_text.SetTextSize(0.04)
+    set_text_style(right_text, 0.04)
     right_text.Draw()
     pads[canvas.pad_nr].latex.append(right_text)
+
+    # determine coordinates and draw cms text
+    cms_x = 0.16
+    cms_y = 0.955
+    if position == "top":
+        cms_text = TLatex(cms_x, cms_y, "#font[62]{CMS} #scale[0.8]{#font[52]{" + settings.cms_text + "}}   #scale[0.8]{" + additional_text + "}")
+        set_text_style(cms_text)
+        cms_text.Draw()
+
+        # done
+        pads[canvas.pad_nr].latex.append(cms_text)
+        return
+
+    elif position == "left":
+        cms_x = 0.16
+        cms_y = 0.87
+    elif position == "center":
+        cms_x = 0.48
+        cms_y = 0.87
+    elif position == "right":
+        cms_x = 0.74
+        cms_y = 0.87
+
+    cms_text  = TLatex(cms_x, cms_y, "#font[62]{CMS}")
+    cms_text2 = TLatex(cms_x, cms_y - 0.05, "#scale[0.8]{#font[52]{" + settings.cms_text + "}}")
+    cms_text3 = TLatex(cms_x, cms_y - 0.13, "#scale[0.8]{" + additional_text + "}")
+
+    set_text_style(cms_text)
+    set_text_style(cms_text2)
+    set_text_style(cms_text3)
+
+    cms_text.Draw()
+    cms_text2.Draw()
+    cms_text3.Draw()
+
+    pads[canvas.pad_nr].latex.extend([cms_text, cms_text2, cms_text3])
 
 
 
@@ -637,6 +678,7 @@ def legend(minimum_bin_height = 1e-3, number_of_columns = 1, x1 = None, y1 = Non
     # collect backgrounds, data and ordered signals
 
     data = (pads[canvas.pad_nr].data if settings.draw_data else None)
+    systematics = (pads[canvas.pad_nr].systematics if settings.draw_systematics else None)
     backgrounds = (filter_by_bin_height(minimum_bin_height, pads[canvas.pad_nr].backgrounds) if settings.draw_background else [])
     signals = (filter_by_bin_height(minimum_bin_height, pads[canvas.pad_nr].signals) if settings.draw_signal else [])
 
@@ -658,6 +700,9 @@ def legend(minimum_bin_height = 1e-3, number_of_columns = 1, x1 = None, y1 = Non
     # take the ordered backgrounds
     for background in backgrounds[::-1]:
         legend.AddEntry(background.hist, background.label, "f")
+
+    if systematics:
+        legend.AddEntry(systematics.hist, systematics.label, "f")
     
     if data:
         legend.AddEntry(data.hist, data.label, "pe")
@@ -697,6 +742,10 @@ def cumulative():
 
     if not get_draw_object():
         print "Use plot(histogram_name) first."
+        return
+
+    if pads[canvas.pad_nr].raw_systematics and settings.draw_systematics:
+        print "Cannot call cumulative() when showing the systematics."
         return
 
     for process in list(itertools.chain(pads[canvas.pad_nr].raw_data,
@@ -836,7 +885,6 @@ def draw():
     # plot all the backgrounds
     same = ""
     for process in pads[canvas.pad_nr].ordered_processes:
-        print process.style + same
         process.hist.Draw(process.style + same)
         same = "same"
 
