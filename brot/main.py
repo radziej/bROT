@@ -562,7 +562,8 @@ def cms_text(position = "top", additional_text = ""):
         print "No pad."
         return
 
-    cd(1)
+    # make sure to target pad
+    cd(canvas.pad_nr)
 
     # clearing old latex objects
     if pads[canvas.pad_nr].latex:
@@ -801,7 +802,7 @@ def compose_draw_objects():
 
             # create systematics uncertainty band process
             uncertainty_band = Process()
-            uncertainty_band.hist = pads[canvas.pad_nr].systematics.hist
+            uncertainty_band.hist = pads[canvas.pad_nr].systematics.hist.Clone()
             uncertainty_band.label = pads[canvas.pad_nr].systematics.label
             uncertainty_band.style = pads[canvas.pad_nr].systematics.style
 
@@ -981,6 +982,22 @@ def ratio():
 
     ratio.Draw("EP")
     pads[canvas.pad_nr].ratio.hist = ratio
+
+    # systematics
+    if pads[canvas.pad_nr].raw_systematics:
+        systematics = pads[canvas.pad_nr].systematics.hist.Clone()
+
+        for i in range(1, systematics.GetXaxis().GetNbins()):
+            systematics.SetBinError(i, systematics.GetBinContent(i))
+            systematics.SetBinContent(i, ratio.GetBinContent(i))
+
+        # draw if drawing enabled
+        if settings.draw_systematics:
+            systematics.Draw("E2same")
+
+        pads[canvas.pad_nr].ratio.systematics = systematics
+
+        
 
     # line
     line = TLine(ratio.GetXaxis().GetBinLowEdge(ratio.GetXaxis().GetFirst()), 1.,
